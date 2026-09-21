@@ -1,0 +1,7 @@
+// The page's version. When the page changes, add a new entry at the top: a higher number, the date, and what changed.
+window.LEDGER_VERSION = [
+  { version: "1.1", date: "2026-09-21", changes: [
+    "Shows the page's version and date next to the title, with this list of changes." ] },
+  { version: "1.0", date: "2026-09-21", changes: [
+    "First version: statement, sending payments with proof, budget workbook, and access requests between entities." ] }
+];

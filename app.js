@@ -24,7 +24,8 @@ const store = {
   set me(v) { try { localStorage.setItem("ledger.me", v); } catch (e) {} }
 };
 
-const S = { own: null, shared: [], tab: "statement", flash: null, data: {} };
+const S = { own: null, shared: [], tab: "statement", flash: null, data: {}, showVersion: false };
+const VERSIONS = window.LEDGER_VERSION || [];
 
 /* ---------- GitHub API ---------- */
 async function gh(token, method, path, body, accept) {
@@ -126,7 +127,15 @@ function render() {
   else if (S.tab === "access") body = viewAccess();
   else if (S.tab.startsWith("shared-")) { const s = S.shared[Number(S.tab.slice(7))]; body = `<p class="note">Shared with you, read only.</p>` + (s.statement ? viewStatement(s.statement) : "") + (s.summary ? viewBudget(s.summary, false) : ""); }
   else body = viewSettings();
-  document.getElementById("main").innerHTML = flashHtml() + whoAmI() + body;
+  const v = VERSIONS[0], vb = document.getElementById("version");
+  if (v && vb) { vb.textContent = `Version ${v.version}, ${dLabel(v.date)}`; vb.setAttribute("aria-expanded", String(S.showVersion)); }
+  document.getElementById("main").innerHTML = flashHtml() + versionHtml() + whoAmI() + body;
+}
+
+function versionHtml() {
+  if (!S.showVersion || !VERSIONS.length) return "";
+  return `<div class="panel changes"><h3 style="margin-top:0">What's changed</h3>${VERSIONS.map(v => `<h3>Version ${esc(v.version)}, ${dLabel(v.date)}</h3><ul>${v.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`).join("")}
+    <p style="margin:12px 0 0"><button type="button" class="btn ghost sm" data-act="version">Close</button></p></div>`;
 }
 
 function whoAmI() {
@@ -233,6 +242,7 @@ document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-act]"); if (!b || b.disabled) return;
   const a = b.dataset.act;
   if (a === "tab") { S.tab = b.dataset.tab; return render(); }
+  if (a === "version") { S.showVersion = !S.showVersion; return render(); }
   if (a === "me") { store.me = b.dataset.name; flash("Thanks, " + store.me + "."); return render(); }
   if (a === "remove-token") { const t = store.tokens; t.splice(Number(b.dataset.i), 1); store.tokens = t; flash("Key removed from this device."); return boot(); }
   if (a === "download-budget") {
