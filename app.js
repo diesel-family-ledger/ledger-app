@@ -273,7 +273,9 @@ function viewPayments() {
 function viewBudget(sm, editable) {
   let h = "";
   if (editable) h += `<div class="panel"><h3>Your budget workbook</h3><p class="help">Keep <b>Budget.xlsx</b> on your phone or computer in Excel. When you change it, upload it here. The summary updates within the hour.</p>
-    <div class="row"><button type="button" class="btn ghost" data-act="download-budget">Download the current workbook</button></div>
+    <div class="row"><button type="button" class="btn ghost" data-act="download-budget">Download the current workbook</button>
+      <a class="btn ghost" href="budget-tracker.xlsx" download="Family budget tracker.xlsx">Download the blank tracker</a></div>
+    <p class="note" style="margin-top:8px">Use the tracker's layout: the page reads its Summary tab. A workbook laid out differently can't be read.</p>
     <form class="f" data-form="budget" style="margin-top:10px"><label>Upload the updated workbook (.xlsx)<input type="file" name="book" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label><div><button class="btn" type="submit">Upload</button></div></form></div>`;
   if (!sm) return h + `<div class="panel"><p class="empty">No budget summary yet.</p></div>`;
   if (sm.problem) return h + `<div class="panel"><h3>Budget summary</h3><p>${esc(sm.problem)}</p></div>`;
