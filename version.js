@@ -1,6 +1,8 @@
 // The page's version. When the page changes, add a new entry at the top: a higher number, the date, and what changed.
 // The exact time shown next to the version is read from GitHub: when this file was last uploaded.
 window.LEDGER_VERSION = [
+  { version: "1.3", date: "2026-09-21", changes: [
+    "A read-only lender view for Veronica: family overview, every entity's statement and budget, payments waiting to be confirmed, and proofs of payment to download." ] },
   { version: "1.2", date: "2026-09-21", changes: [
     "The version at the top now shows the exact date and time it was published." ] },
   { version: "1.1", date: "2026-09-21", changes: [

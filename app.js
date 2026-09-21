@@ -24,7 +24,8 @@ const store = {
   set me(v) { try { localStorage.setItem("ledger.me", v); } catch (e) {} }
 };
 
-const S = { own: null, shared: [], tab: "statement", flash: null, data: {}, showVersion: false };
+const S = { own: null, shared: [], lender: null, tab: "statement", flash: null, data: {}, showVersion: false };
+const ADMIN = "ledger-admin";
 const VERSIONS = window.LEDGER_VERSION || [];
 let PUBLISHED = null;   // when version.js was last uploaded, from GitHub's public record of this page
 
@@ -77,6 +78,7 @@ async function reposFor(token) {
   return names;
 }
 function classify(token, names) {
+  if (names.includes(ADMIN)) return { kind: "lender", token };   // a read-only lender view key opens every repository
   const pay = names.find(n => n.endsWith("-payments"));
   if (pay) { const slug = pay.slice(0, -9); return { kind: "own", token, slug, ledger: slug + "-ledger", budget: slug + "-budget", payments: pay }; }
   const slugs = [...new Set(names.filter(n => /-(ledger|budget)$/.test(n)).map(n => n.replace(/-(ledger|budget)$/, "")))];
@@ -85,24 +87,35 @@ function classify(token, names) {
 
 /* ---------- loading ---------- */
 async function boot() {
-  S.own = null; S.shared = []; S.data = {};
+  S.own = null; S.shared = []; S.lender = null; S.data = {};
   const tokens = store.tokens;
   if (!tokens.length) { S.tab = "settings"; return render(); }
   for (const t of tokens) {
     try {
       const c = classify(t.token, await reposFor(t.token));
-      if (Array.isArray(c)) S.shared.push(...c); else if (!S.own) S.own = c;
+      if (Array.isArray(c)) S.shared.push(...c); else if (c.kind === "lender") S.lender = S.lender || c; else if (!S.own) S.own = c;
       t.problem = null;
     } catch (e) { t.problem = e.message; }
   }
   store.tokens = tokens;
-  if (!S.own && !S.shared.length) S.tab = "settings";
+  if (S.lender) { S.own = null; S.shared = []; if (!S.tab.startsWith("l-")) S.tab = "l-overview"; }
+  if (!S.own && !S.shared.length && !S.lender) S.tab = "settings";
   await load();
 }
 
 async function load() {
   const main = document.getElementById("main");
   try {
+    if (S.lender) {
+      const t = S.lender.token;
+      const [family, intake, access] = await Promise.all([readJSON(t, ADMIN, "config/family.json"), readJSON(t, ADMIN, "data/intake.json"), readJSON(t, ADMIN, "data/access.json")]);
+      const entities = (family && family.entities) || [];
+      const per = await Promise.all(entities.map(async e => {
+        const [statement, summary, ledger] = await Promise.all([readJSON(t, e.slug + "-ledger", "statement.json"), readJSON(t, e.slug + "-budget", "summary.json"), readJSON(t, ADMIN, `data/ledgers/${e.slug}.json`)]);
+        return { slug: e.slug, name: e.name, statement, summary, ledger };
+      }));
+      S.data.lender = { entities: per, intake: intake || {}, access: access || [], lenders: ((family && family.lenders) || []).map(l => l.name).join(" or ") || "Howard" };
+    }
     if (S.own) {
       const o = S.own;
       [S.data.statement, S.data.status, S.data.summary] = await Promise.all([
@@ -125,15 +138,18 @@ const pill = (cls, t) => `<span class="pill ${cls}">${esc(t)}</span>`;
 
 function render() {
   const tabs = [];
+  if (S.lender) { tabs.push(["l-overview", "Overview"]); ((S.data.lender && S.data.lender.entities) || []).forEach(e => tabs.push(["l-" + e.slug, e.name])); }
   if (S.own) tabs.push(["statement", "Statement"], ["payments", "Payments"], ["budget", "Budget"], ["access", "Access"]);
   S.shared.forEach((s, i) => tabs.push(["shared-" + i, (s.statement && s.statement.entity) || (s.summary && s.summary.entity) || "Shared"]));
   tabs.push(["settings", "Settings"]);
   if (!tabs.some(t => t[0] === S.tab)) S.tab = tabs[0][0];
   document.getElementById("tabs").innerHTML = tabs.map(([k, v]) => `<button type="button" role="tab" aria-selected="${S.tab === k}" data-act="tab" data-tab="${k}">${esc(v)}</button>`).join("");
   const entity = S.data.status && S.data.status.entity;
-  document.getElementById("who").textContent = S.own ? (store.me ? store.me + ", " : "") + (entity || "") : "";
+  document.getElementById("who").textContent = S.lender ? "Lender view, read only" : S.own ? (store.me ? store.me + ", " : "") + (entity || "") : "";
   let body = "";
-  if (S.tab === "statement") body = viewStatement(S.data.statement);
+  if (S.tab === "l-overview") body = viewLenderOverview();
+  else if (S.tab.startsWith("l-")) body = viewLenderEntity(S.tab.slice(2));
+  else if (S.tab === "statement") body = viewStatement(S.data.statement);
   else if (S.tab === "payments") body = viewPayments();
   else if (S.tab === "budget") body = viewBudget(S.data.summary, true);
   else if (S.tab === "access") body = viewAccess();
@@ -152,6 +168,52 @@ function versionHtml() {
   if (!S.showVersion || !VERSIONS.length) return "";
   return `<div class="panel changes"><h3 style="margin-top:0">What's changed</h3>${VERSIONS.map((v, i) => `<h3>Version ${esc(v.version)}, ${i === 0 && PUBLISHED ? stamp(PUBLISHED) : dLabel(v.date)}</h3><ul>${v.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`).join("")}
     <p style="margin:12px 0 0"><button type="button" class="btn ghost sm" data-act="version">Close</button></p></div>`;
+}
+
+/* ---------- lender view (read only) ---------- */
+const PROOF_TYPES = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
+const proofButton = path => path ? `<button type="button" class="btn ghost sm" data-act="proof" data-path="${esc(path)}">Download proof</button>` : "";
+
+function viewLenderOverview() {
+  const L = S.data.lender;
+  if (!L) return `<div class="panel"><p class="empty">Loading…</p></div>`;
+  const rows = L.entities.map(e => {
+    const st = e.statement && e.statement.loan && e.statement.loan.state;
+    const inh = ((e.statement && e.statement.inheritances) || []).reduce((s, i) => s + i.amount_cents, 0);
+    return { e, st, inh };
+  });
+  const sum = f => rows.reduce((s, r) => s + (f(r) || 0), 0);
+  const waiting = Object.values(L.intake).filter(r => r.status === "pending").sort((a, b) => a.sid.localeCompare(b.sid));
+  const shared = L.access.filter(g => g.status === "approved" || g.status === "awaiting-token");
+  const nameOf = slug => (L.entities.find(e => e.slug === slug) || {}).name || slug;
+  return `<div class="pagehead"><h2>Family overview</h2><span class="meta">Read only. ${esc(L.lenders)} confirms payments on GitHub.</span></div>
+  <div class="stats">
+    <div class="stat"><div class="k">Outstanding across all loans</div><div class="v">${R(sum(r => r.st && r.st.outstanding_cents))}</div><div class="s">All loans are interest-free</div></div>
+    <div class="stat"><div class="k">Inheritance given to date</div><div class="v">${R(sum(r => r.inh))}</div></div>
+    <div class="stat"><div class="k">Payments waiting to be confirmed</div><div class="v ${waiting.length ? "bad" : "good"}">${waiting.length}</div></div>
+  </div>
+  <div class="panel"><h3>Payments waiting to be confirmed</h3>${waiting.length ? `<div class="scroll"><table class="t"><thead><tr><th>Entity</th><th>Month</th><th class="n">Amount</th><th>Date on proof</th><th>Sent by</th><th></th></tr></thead><tbody>
+    ${waiting.map(r => `<tr><td>${esc(nameOf(r.slug))}</td><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${proofButton(r.proof)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<p class="empty">Nothing waiting.</p>`}</div>
+  <div class="panel"><h3>What each entity has received</h3><div class="scroll"><table class="t"><thead><tr><th>Entity</th><th class="n">Inheritance</th><th class="n">Loan advanced</th><th class="n">Written off</th><th class="n">Repaid</th><th class="n">Outstanding</th><th>Status</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><button type="button" class="btn ghost sm" data-act="tab" data-tab="l-${esc(r.e.slug)}">${esc(r.e.name)}</button></td><td class="n">${R(r.inh)}</td>
+      <td class="n">${r.st ? R(r.st.advanced_cents) : "—"}</td><td class="n">${r.st ? R(r.st.writeoffs_cents) : "—"}</td><td class="n">${r.st ? R(r.st.repaid_cents) : "—"}</td><td class="n">${r.st ? R(r.st.outstanding_cents) : "—"}</td>
+      <td>${!r.st ? '<span class="note">No loan</span>' : r.st.arrears_cents > 0 ? pill("bad", "Behind " + R(r.st.arrears_cents)) : pill("ok", "Up to date")}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td>Family</td><td class="n">${R(sum(r => r.inh))}</td><td class="n">${R(sum(r => r.st && r.st.advanced_cents))}</td><td class="n">${R(sum(r => r.st && r.st.writeoffs_cents))}</td><td class="n">${R(sum(r => r.st && r.st.repaid_cents))}</td><td class="n">${R(sum(r => r.st && r.st.outstanding_cents))}</td><td></td></tr></tfoot></table></div></div>
+  <div class="panel"><h3>Access between entities</h3>${shared.length ? `<table class="t"><thead><tr><th>Who</th><th>Can see</th><th>What</th><th>Until</th></tr></thead><tbody>${shared.map(g => `<tr><td>${esc(nameOf(g.from))}</td><td>${esc(nameOf(g.to))}</td><td>${esc(g.sections.map(s => SECTION_NAMES[s]).join(", "))}</td><td>${g.status === "awaiting-token" ? "Waiting for the key" : dLabel(g.expires_at)}</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Nobody has access to another entity.</p>`}</div>`;
+}
+
+function viewLenderEntity(slug) {
+  const L = S.data.lender, e = L && L.entities.find(x => x.slug === slug);
+  if (!e) return `<div class="panel"><p class="empty">Not found.</p></div>`;
+  const pays = ((e.ledger && e.ledger.payments) || []).slice().sort((a, b) => (b.month + b.paid_on).localeCompare(a.month + a.paid_on));
+  const waiting = Object.values(L.intake).filter(r => r.slug === slug && r.status === "pending");
+  const proofs = `<div class="panel"><h3>Payments and proofs</h3>${pays.length || waiting.length ? `<div class="scroll"><table class="t"><thead><tr><th>Month</th><th class="n">Amount</th><th>Date on proof</th><th>Sent by</th><th>Status</th><th></th></tr></thead><tbody>
+    ${waiting.map(r => `<tr><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${pill("pending", "Waiting")}</td><td>${proofButton(r.proof)}</td></tr>`).join("")}
+    ${pays.map(p => `<tr class="${p.reversed ? "reversed" : ""}"><td>${ymLabel(p.month)}</td><td class="n amt">${R(p.amount_cents)}</td><td>${dLabel(p.paid_on)}</td><td>${esc(p.sent_by || "")}</td>
+      <td>${p.reversed ? pill("off", "Reversed") + `<div class="note">${esc(p.reversed.reason)}</div>` : p.status === "confirmed" ? pill("ok", "Confirmed") + `<div class="note">${esc(p.decided_by || "")}</div>` : pill("bad", "Rejected")}</td><td>${proofButton(p.proof)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<p class="empty">No payments yet.</p>`}</div>`;
+  return (e.statement ? viewStatement(e.statement) : `<div class="panel"><p class="empty">No statement yet.</p></div>`) + proofs + (e.summary ? viewBudget(e.summary, false) : "");
 }
 
 function whoAmI() {
@@ -258,6 +320,20 @@ document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-act]"); if (!b || b.disabled) return;
   const a = b.dataset.act;
   if (a === "tab") { S.tab = b.dataset.tab; return render(); }
+  if (a === "proof" && S.lender) {
+    const path = b.dataset.path, ext = (path.split(".").pop() || "").toLowerCase();
+    if (!/^proofs\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.(pdf|jpg|jpeg|png)$/.test(path)) return;
+    b.disabled = true;
+    try {
+      const bytes = await readBytes(S.lender.token, ADMIN, path);
+      if (!bytes) throw new Error("That proof could not be found.");
+      const url = URL.createObjectURL(new Blob([bytes], { type: PROOF_TYPES[ext] || "application/octet-stream" }));
+      const link = document.createElement("a"); link.href = url; link.download = path.split("/").pop(); document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) { flash(e.message, true); render(); }
+    b.disabled = false;
+    return;
+  }
   if (a === "version") { S.showVersion = !S.showVersion; return render(); }
   if (a === "me") { store.me = b.dataset.name; flash("Thanks, " + store.me + "."); return render(); }
   if (a === "remove-token") { const t = store.tokens; t.splice(Number(b.dataset.i), 1); store.tokens = t; flash("Key removed from this device."); return boot(); }
@@ -289,10 +365,10 @@ document.addEventListener("submit", async ev => {
       const names = await reposFor(token);
       if (!names.length) throw new Error("This key doesn't open anything in the family ledger. Ask Howard to check it.");
       const c = classify(token, names);
-      const label = Array.isArray(c) ? "Shared: " + c.map(x => x.slug).join(", ") : "Your ledger";
+      const label = Array.isArray(c) ? "Shared: " + c.map(x => x.slug).join(", ") : c.kind === "lender" ? "Lender view (read only)" : "Your ledger";
       store.tokens = store.tokens.filter(t => t.token !== token).concat([{ token, label, added: today() }]);
       flash("Key added.");
-      S.tab = Array.isArray(c) ? "settings" : "statement";
+      S.tab = Array.isArray(c) ? "settings" : c.kind === "lender" ? "l-overview" : "statement";
       return boot();
     }
     if (!S.own) throw new Error("Add your key first.");
