@@ -26,6 +26,18 @@ const store = {
 
 const S = { own: null, shared: [], tab: "statement", flash: null, data: {}, showVersion: false };
 const VERSIONS = window.LEDGER_VERSION || [];
+let PUBLISHED = null;   // when version.js was last uploaded, from GitHub's public record of this page
+
+async function loadPublished() {
+  try {
+    const res = await fetch(`${API}/repos/${ORG}/ledger-app/commits?path=version.js&per_page=1`, { headers: { "Accept": "application/vnd.github+json" } });
+    if (!res.ok) return;
+    const list = JSON.parse(await res.text());
+    const when = list && list[0] && list[0].commit && list[0].commit.committer && list[0].commit.committer.date;
+    if (when) { PUBLISHED = new Date(when); render(); }
+  } catch (e) { /* keep showing the date from version.js */ }
+}
+const stamp = d => d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear() + ", " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 
 /* ---------- GitHub API ---------- */
 async function gh(token, method, path, body, accept) {
@@ -128,13 +140,17 @@ function render() {
   else if (S.tab.startsWith("shared-")) { const s = S.shared[Number(S.tab.slice(7))]; body = `<p class="note">Shared with you, read only.</p>` + (s.statement ? viewStatement(s.statement) : "") + (s.summary ? viewBudget(s.summary, false) : ""); }
   else body = viewSettings();
   const v = VERSIONS[0], vb = document.getElementById("version");
-  if (v && vb) { vb.textContent = `Version ${v.version}, ${dLabel(v.date)}`; vb.setAttribute("aria-expanded", String(S.showVersion)); }
+  if (v && vb) {
+    vb.textContent = `Version ${v.version}, ${PUBLISHED ? stamp(PUBLISHED) : dLabel(v.date)}`;
+    vb.title = PUBLISHED ? "Published " + PUBLISHED.toString() : "";
+    vb.setAttribute("aria-expanded", String(S.showVersion));
+  }
   document.getElementById("main").innerHTML = flashHtml() + versionHtml() + whoAmI() + body;
 }
 
 function versionHtml() {
   if (!S.showVersion || !VERSIONS.length) return "";
-  return `<div class="panel changes"><h3 style="margin-top:0">What's changed</h3>${VERSIONS.map(v => `<h3>Version ${esc(v.version)}, ${dLabel(v.date)}</h3><ul>${v.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`).join("")}
+  return `<div class="panel changes"><h3 style="margin-top:0">What's changed</h3>${VERSIONS.map((v, i) => `<h3>Version ${esc(v.version)}, ${i === 0 && PUBLISHED ? stamp(PUBLISHED) : dLabel(v.date)}</h3><ul>${v.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`).join("")}
     <p style="margin:12px 0 0"><button type="button" class="btn ghost sm" data-act="version">Close</button></p></div>`;
 }
 
@@ -314,3 +330,4 @@ document.addEventListener("submit", async ev => {
 });
 
 boot();
+loadPublished();
