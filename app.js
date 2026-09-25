@@ -114,7 +114,8 @@ async function load() {
         const [statement, summary, ledger] = await Promise.all([readJSON(t, e.slug + "-ledger", "statement.json"), readJSON(t, e.slug + "-budget", "summary.json"), readJSON(t, ADMIN, `data/ledgers/${e.slug}.json`)]);
         return { slug: e.slug, name: e.name, statement, summary, ledger };
       }));
-      S.data.lender = { entities: per, intake: intake || {}, access: access || [], lenders: ((family && family.lenders) || []).map(l => l.name).join(" or ") || "Howard" };
+      const lenderNames = ((family && family.lenders) || []).map(l => l.name);
+      S.data.lender = { entities: per, intake: intake || {}, access: access || [], names: lenderNames, lenders: lenderNames.join(" or ") || "Howard" };
     }
     if (S.own) {
       const o = S.own;
@@ -173,6 +174,17 @@ function versionHtml() {
 /* ---------- lender view (read only) ---------- */
 const PROOF_TYPES = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
 const proofButton = path => path ? `<button type="button" class="btn ghost sm" data-act="proof" data-path="${esc(path)}">Download proof</button>` : "";
+const lenderName = () => { const n = (S.data.lender && S.data.lender.names) || []; return n.length === 1 ? n[0] : (n.includes(store.me) ? store.me : null); };
+const decideButtons = sid => lenderName()
+  ? `<div class="row"><button type="button" class="btn sm" data-act="decide-pay" data-sid="${esc(sid)}" data-decision="confirm">Confirm</button><button type="button" class="btn danger sm" data-act="decide-pay" data-sid="${esc(sid)}" data-decision="reject">Reject</button></div>`
+  : `<span class="note">Choose who you are first</span>`;
+
+function lenderWho() {
+  const names = (S.data.lender && S.data.lender.names) || [];
+  if (names.length < 2 || lenderName()) return "";
+  return `<div class="panel"><h3>Who are you?</h3><p class="help">Needed so the ledger records who confirmed each payment.</p>
+    <div class="row">${names.map(n => `<button type="button" class="btn ghost" data-act="me" data-name="${esc(n)}">${esc(n)}</button>`).join("")}</div></div>`;
+}
 
 function viewLenderOverview() {
   const L = S.data.lender;
@@ -192,8 +204,9 @@ function viewLenderOverview() {
     <div class="stat"><div class="k">Inheritance given to date</div><div class="v">${R(sum(r => r.inh))}</div></div>
     <div class="stat"><div class="k">Payments waiting to be confirmed</div><div class="v ${waiting.length ? "bad" : "good"}">${waiting.length}</div></div>
   </div>
-  <div class="panel"><h3>Payments waiting to be confirmed</h3>${waiting.length ? `<div class="scroll"><table class="t"><thead><tr><th>Entity</th><th>Month</th><th class="n">Amount</th><th>Date on proof</th><th>Sent by</th><th></th></tr></thead><tbody>
-    ${waiting.map(r => `<tr><td>${esc(nameOf(r.slug))}</td><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${proofButton(r.proof)}</td></tr>`).join("")}
+  ${lenderWho()}
+  <div class="panel"><h3>Payments waiting to be confirmed</h3><p class="help">Check the proof against the bank statement, then confirm or reject. A read-only key can only look.</p>${waiting.length ? `<div class="scroll"><table class="t"><thead><tr><th>Entity</th><th>Month</th><th class="n">Amount</th><th>Date on proof</th><th>Sent by</th><th>Proof</th><th></th></tr></thead><tbody>
+    ${waiting.map(r => `<tr><td>${esc(nameOf(r.slug))}</td><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${proofButton(r.proof)}</td><td>${decideButtons(r.sid)}</td></tr>`).join("")}
   </tbody></table></div>` : `<p class="empty">Nothing waiting.</p>`}</div>
   <div class="panel"><h3>What each entity has received</h3><div class="scroll"><table class="t"><thead><tr><th>Entity</th><th class="n">Inheritance</th><th class="n">Loan advanced</th><th class="n">Written off</th><th class="n">Repaid</th><th class="n">Outstanding</th><th>Status</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><button type="button" class="btn ghost sm" data-act="tab" data-tab="l-${esc(r.e.slug)}">${esc(r.e.name)}</button></td><td class="n">${R(r.inh)}</td>
@@ -209,7 +222,7 @@ function viewLenderEntity(slug) {
   const pays = ((e.ledger && e.ledger.payments) || []).slice().sort((a, b) => (b.month + b.paid_on).localeCompare(a.month + a.paid_on));
   const waiting = Object.values(L.intake).filter(r => r.slug === slug && r.status === "pending");
   const proofs = `<div class="panel"><h3>Payments and proofs</h3>${pays.length || waiting.length ? `<div class="scroll"><table class="t"><thead><tr><th>Month</th><th class="n">Amount</th><th>Date on proof</th><th>Sent by</th><th>Status</th><th></th></tr></thead><tbody>
-    ${waiting.map(r => `<tr><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${pill("pending", "Waiting")}</td><td>${proofButton(r.proof)}</td></tr>`).join("")}
+    ${waiting.map(r => `<tr><td>${ymLabel(r.month)}</td><td class="n">${R(r.amount_cents)}</td><td>${dLabel(r.paid_on)}</td><td>${esc(r.sent_by)}</td><td>${pill("pending", "Waiting")}</td><td>${proofButton(r.proof)} ${decideButtons(r.sid)}</td></tr>`).join("")}
     ${pays.map(p => `<tr class="${p.reversed ? "reversed" : ""}"><td>${ymLabel(p.month)}</td><td class="n amt">${R(p.amount_cents)}</td><td>${dLabel(p.paid_on)}</td><td>${esc(p.sent_by || "")}</td>
       <td>${p.reversed ? pill("off", "Reversed") + `<div class="note">${esc(p.reversed.reason)}</div>` : p.status === "confirmed" ? pill("ok", "Confirmed") + `<div class="note">${esc(p.decided_by || "")}</div>` : pill("bad", "Rejected")}</td><td>${proofButton(p.proof)}</td></tr>`).join("")}
   </tbody></table></div>` : `<p class="empty">No payments yet.</p>`}</div>`;
@@ -322,6 +335,25 @@ document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-act]"); if (!b || b.disabled) return;
   const a = b.dataset.act;
   if (a === "tab") { S.tab = b.dataset.tab; return render(); }
+  if (a === "decide-pay" && S.lender) {
+    const who = lenderName();
+    if (!who) return;
+    const sid = b.dataset.sid, decision = b.dataset.decision;
+    b.disabled = true;
+    try {
+      await writeFile(S.lender.token, ADMIN, `decisions/payments/${sid}.json`, jsonB64({ decision, by: who, at: new Date().toISOString() }),
+                      `${decision === "confirm" ? "Confirm" : "Reject"} a payment from the lender view`);
+      let now = false;
+      try { await gh(S.lender.token, "POST", `/repos/${ORG}/${ADMIN}/actions/workflows/ledger.yml/dispatches`, { ref: "main", inputs: { mode: "run" } }); now = true; } catch (e) {}
+      const rec = S.data.lender.intake && Object.values(S.data.lender.intake).find(r => r.sid === sid);
+      if (rec) rec.status = decision === "confirm" ? "confirmed" : "rejected";
+      flash(`${decision === "confirm" ? "Confirmed" : "Rejected"}. ` + (now ? "The ledger is updating now; reload in a minute." : "It applies at the next hourly run."));
+    } catch (e) {
+      flash("That key can only read, so it can't confirm payments. " + e.message, true);
+    }
+    b.disabled = false;
+    return render();
+  }
   if (a === "proof" && S.lender) {
     const path = b.dataset.path, ext = (path.split(".").pop() || "").toLowerCase();
     if (!/^proofs\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.(pdf|jpg|jpeg|png)$/.test(path)) return;

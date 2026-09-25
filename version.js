@@ -1,6 +1,9 @@
 // The page's version. When the page changes, add a new entry at the top: a higher number, the date, and what changed.
 // The exact time shown next to the version is read from GitHub: when this file was last uploaded.
 window.LEDGER_VERSION = [
+  { version: "1.5", date: "2026-09-21", changes: [
+    "Lender view: confirm or reject a payment on the page, after downloading its proof.",
+    "Lender view: the ledger updates straight away when a key allows it, instead of waiting for the next hour." ] },
   { version: "1.4", date: "2026-09-21", changes: [
     "Budget: download the blank Family budget tracker from the page.",
     "Budget: clearer message when an uploaded workbook can't be read, naming the tabs it has." ] },
